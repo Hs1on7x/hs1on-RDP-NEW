@@ -1,0 +1,65 @@
+name: RDP-Kali
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: ubuntu-latest  # Use ubuntu-latest and install Kali tools, or you can use self-hosted Kali runner
+    timeout-minutes: 3600
+    steps:
+      - name: Update & Install XRDP
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y xrdp xfce4 xfce4-terminal
+          sudo systemctl enable xrdp
+          sudo systemctl start xrdp
+
+      - name: Create RDP User with Static Password
+        run: |
+          USER="toolboxlap"
+          PASSWORD="admin@123"
+          if ! id -u $USER > /dev/null 2>&1; then
+            sudo useradd -m -s /bin/bash $USER
+            echo "$USER:$PASSWORD" | sudo chpasswd
+          fi
+          sudo adduser $USER sudo
+          echo "RDP_CREDS=User: $USER | Password: $PASSWORD" >> $GITHUB_ENV
+
+      - name: Configure Firewall for XRDP
+        run: |
+          sudo ufw allow 3389/tcp
+          sudo ufw --force enable
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-${GITHUB_RUN_ID}
+
+      - name: Get Tailscale IP
+        run: |
+          TS_IP=$(tailscale ip -4)
+          if [ -z "$TS_IP" ]; then
+            echo "Tailscale IP not assigned. Exiting."
+            exit 1
+          fi
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+
+      - name: Verify RDP Accessibility
+        run: |
+          if ! nc -zv $TAILSCALE_IP 3389; then
+            echo "TCP connection to RDP port 3389 failed"
+            exit 1
+          fi
+          echo "TCP connectivity successful!"
+
+      - name: Maintain Connection
+        run: |
+          echo "=== RDP ACCESS ==="
+          echo "Address: $TAILSCALE_IP"
+          echo "Username: toolboxlap"
+          echo "Password: admin@123"
+          echo "================="
+          while true; do
+            echo "[$(date)] RDP Active - Use Ctrl+C in workflow to terminate"
+            sleep 300
+          done
