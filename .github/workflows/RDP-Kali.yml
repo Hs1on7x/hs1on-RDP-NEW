@@ -1,110 +1,146 @@
-name: RDP-k  # Keeping your naming convention
+name: RDP-k
 on:
   workflow_dispatch:
 jobs:
   secure-rdp:
-    runs-on: ubuntu-latest  # Changed from windows-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 3600
     steps:
-      - name: Configure SSH Server (Linux RDP Equivalent)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y openssh-server
-          sudo systemctl enable ssh
-          sudo systemctl start ssh
 
-          # Optional: Allow root login (not recommended for prod, but for lab)
-          echo "PermitRootLogin yes" | sudo tee -a /etc/ssh/sshd_config
-          echo "PasswordAuthentication yes" | sudo tee -a /etc/ssh/sshd_config
-          sudo systemctl restart ssh
-
-      - name: Create SSH User with Static Password
+      - name: Prepare Environment
         run: |
-          PASSWORD="admin@123"
+          echo "Preparing Kali Linux SSH + Tailscale environment..."
+
+      - name: Pull and Run Kali Linux in Docker with SSH + Tailscale
+        run: |
+          # Pull official lightweight Kali image
+          docker pull kalilinux/kali-rolling
+
+          # Define credentials
           USERNAME="TOOLBOXLAP"
+          PASSWORD="admin@123"
+          AUTHKEY="${{ secrets.TAILSCALE_AUTH_KEY }}"
 
-          # Create user if doesn't exist
-          if ! id "$USERNAME" &>/dev/null; then
-              sudo useradd -m -s /bin/bash "$USERNAME"
-              echo "$USERNAME:$PASSWORD" | sudo chpasswd
+          # Create startup script for inside the container
+          mkdir -p ./kali-env
+          cat > ./kali-env/start.sh << 'EOF'
+#!/bin/bash
+set -e
+
+USERNAME="${USERNAME:-TOOLBOXLAP}"
+PASSWORD="${PASSWORD:-admin@123}"
+AUTHKEY="${AUTHKEY}"
+
+# Create user if doesn't exist
+if ! id "$USERNAME" &>/dev/null; then
+    useradd -m -s /bin/bash "$USERNAME"
+fi
+
+# Set password
+echo "$USERNAME:$PASSWORD" | chpasswd
+usermod -aG sudo "$USERNAME"
+
+# Install SSH server
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server
+
+# Configure SSH
+mkdir -p /var/run/sshd
+sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+echo "UsePAM no" >> /etc/ssh/sshd_config
+
+# Start SSH daemon
+/usr/sbin/sshd
+
+# Install Tailscale
+curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.tailscale-keyring.list | tee /etc/apt/sources.list.d/tailscale.list
+apt-get update
+apt-get install -y tailscale
+
+# Start Tailscale
+tailscale up --authkey="$AUTHKEY" --hostname="gh-kali-\$(hostname)"
+
+# Wait for IP
+echo "Waiting for Tailscale IP..."
+sleep 15
+IP4=$(tailscale ip -4 2>/dev/null || echo "")
+
+if [ -z "$IP4" ]; then
+    echo "❌ Failed to obtain Tailscale IP" >&2
+    tailscale status
+    exit 1
+fi
+
+echo "✅ Tailscale IP: $IP4"
+echo "✅ SSH User: $USERNAME"
+echo "✅ Password: $PASSWORD"
+echo "✅ Connect via: ssh $USERNAME@$IP4"
+
+# Keep container alive
+tail -f /dev/null
+EOF
+
+          chmod +x ./kali-env/start.sh
+
+          # Launch container with host networking (required for Tailscale)
+          docker run -d \
+            --name kali-ssh \
+            --network host \
+            -e USERNAME="$USERNAME" \
+            -e PASSWORD="$PASSWORD" \
+            -e AUTHKEY="$AUTHKEY" \
+            -v "$(pwd)/kali-env/start.sh:/start.sh" \
+            --restart unless-stopped \
+            kalilinux/kali-rolling \
+            /bin/bash /start.sh
+
+          echo "✅ Kali container launched."
+
+      - name: Wait for Tailscale IP and Export
+        run: |
+          echo "Waiting 30 seconds for Tailscale to connect..."
+          sleep 30
+
+          IP=$(docker exec kali-ssh tailscale ip -4 2>/dev/null || echo "")
+          if [ -z "$IP" ]; then
+            echo "❌ Tailscale IP not assigned." >&2
+            docker logs kali-ssh
+            exit 1
           fi
 
-          # Add to sudo group
-          sudo usermod -aG sudo "$USERNAME"
+          echo "TAILSCALE_IP=$IP" >> $GITHUB_ENV
+          echo "✅ Tailscale IP obtained: $IP"
 
-          # Export creds to GitHub env
-          echo "RDP_CREDS=User: $USERNAME | Password: $PASSWORD" >> $GITHUB_ENV
-
-          # Verify user exists
-          if ! id "$USERNAME" &>/dev/null; then
-              echo "User creation failed" >&2
-              exit 1
-          fi
-
-      - name: Install Tailscale
+      - name: Verify SSH Port is Reachable
         run: |
-          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
-          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
-          sudo apt-get update
-          sudo apt-get install -y tailscale
-
-      - name: Establish Tailscale Connection
-        run: |
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-${GITHUB_RUN_ID}
-
-          TAILSCALE_IP=""
-          retries=0
-          while [ -z "$TAILSCALE_IP" ] && [ $retries -lt 10 ]; do
-              TAILSCALE_IP=$(tailscale ip -4 2>/dev/null)
-              sleep 5
-              retries=$((retries + 1))
-          done
-
-          if [ -z "$TAILSCALE_IP" ]; then
-              echo "Tailscale IP not assigned. Exiting." >&2
-              exit 1
-          fi
-
-          echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
-
-      - name: Verify SSH Accessibility
-        run: |
-          echo "Tailscale IP: $TAILSCALE_IP"
+          echo "Testing SSH access to $TAILSCALE_IP:22..."
           nc -zv $TAILSCALE_IP 22
           if [ $? -ne 0 ]; then
-              echo "SSH port 22 unreachable" >&2
-              exit 1
+            echo "❌ SSH port 22 unreachable" >&2
+            exit 1
           fi
-          echo "SSH connectivity successful!"
+          echo "✅ SSH connectivity confirmed!"
 
-      - name: (Optional) Install GUI + xRDP for Desktop Access (Kali Desktop)
-        run: |
-          # Install Kali desktop + xRDP (heavy, skip if SSH-only)
-          sudo apt-get install -y kali-desktop-xfce xrdp
-          sudo systemctl enable xrdp
-          sudo systemctl start xrdp
-
-          # Set password for xRDP (same user)
-          echo "TOOLBOXLAP:admin@123" | sudo chpasswd
-
-          echo "xRDP installed. Connect via RDP client to $TAILSCALE_IP port 3389 (if forwarded)."
-
-      - name: Maintain Connection
+      - name: Display Connection Instructions
         run: |
           echo
-          echo "=== SSH ACCESS (Your 'Linux RDP') ==="
-          echo "Address: $TAILSCALE_IP"
-          echo "Username: TOOLBOXLAP"
-          echo "Password: admin@123"
-          echo "Port: 22 (SSH) — Use: ssh TOOLBOXLAP@$TAILSCALE_IP"
-          echo
-          if systemctl is-active --quiet xrdp; then
-              echo "GUI via xRDP: Connect to $TAILSCALE_IP:3389"
-          fi
+          echo "======================================"
+          echo "    🚀 KALI LINUX SSH ACCESS READY"
+          echo "======================================"
+          echo "🌐 Tailscale IP: $TAILSCALE_IP"
+          echo "👤 Username: TOOLBOXLAP"
+          echo "🔑 Password: admin@123"
+          echo "🔌 Connect via: ssh TOOLBOXLAP@$TAILSCALE_IP"
+          echo "⏱️  This session will stay alive for up to 6 hours."
+          echo "🛑 To stop: Cancel this workflow manually."
           echo "======================================"
           echo
 
+      - name: Keep Workflow Alive (Persistent Session)
+        run: |
           while true; do
-              echo "[$(date)] SSH Active - Use Ctrl+C in workflow to terminate"
-              sleep 300
+            echo "[$(date)] ✅ SSH Session Active — Workflow will not exit until timeout or manual cancel."
+            sleep 300
           done
