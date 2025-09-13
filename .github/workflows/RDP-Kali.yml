@@ -1,4 +1,4 @@
-name: RDP-k
+name: RDP
 on:
   workflow_dispatch:
 jobs:
@@ -153,6 +153,6 @@ jobs:
           echo ""
           
           while true; do
-              echo "[$(date)] Kali RDP Active - Use Ctrl+C in workflow to terminate"
+              echo "[$(date)] Security Tools RDP Active - Use Ctrl+C in workflow to terminate"
               sleep 300
           done
