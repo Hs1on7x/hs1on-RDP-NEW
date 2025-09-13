@@ -8,11 +8,11 @@ jobs:
     steps:
       - name: Install Desktop Environment and RDP
         run: |
-          # Update package lists
-          sudo apt-get update
+          # Update package lists with retry
+          sudo apt-get update || (sleep 30 && sudo apt-get update)
           
           # Install desktop environment without problematic packages
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing \
             xfce4-session \
             xfce4-panel \
             xfce4-terminal \
@@ -21,7 +21,8 @@ jobs:
             thunar \
             xrdp \
             firefox \
-            gedit
+            gedit \
+            dbus-x11
           
           echo "Desktop environment installed successfully"
           
