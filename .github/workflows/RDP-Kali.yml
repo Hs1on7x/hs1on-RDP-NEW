@@ -125,7 +125,7 @@ jobs:
           echo "Address: $TAILSCALE_IP"
           echo "Username: TOOLBOXLAP"
           echo "Password: admin@123"
-          echo "Desktop: GNOME (Ubuntu Desktop)"
+          echo "Desktop: XFCE4"
           echo "Tools: Metasploit, Nmap, Gobuster, etc."
           echo "=========================="
           echo ""
