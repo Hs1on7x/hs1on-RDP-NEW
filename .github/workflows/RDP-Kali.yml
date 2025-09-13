@@ -1,4 +1,4 @@
-name: RDP  # Keeping your naming convention
+name: RDP-k  # Keeping your naming convention
 on:
   workflow_dispatch:
 jobs:
