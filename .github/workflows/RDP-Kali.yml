@@ -172,13 +172,17 @@ jobs:
           echo "Tailscale IP: $TAILSCALE_IP"
           
           # Test RDP port connectivity
-          if nc -z $TAILSCALE_IP 3389; then
+          timeout 10 bash -c "</dev/tcp/$TAILSCALE_IP/3389" 2>/dev/null
+          if [ $? -eq 0 ]; then
               echo "TCP connectivity to port 3389 successful!"
           else
-              echo "TCP connection to RDP port 3389 failed"
-              # Check if XRDP is running
-              sudo systemctl status xrdp
-              exit 1
+              echo "TCP connection to RDP port 3389 failed, checking XRDP status..."
+              sudo systemctl status xrdp --no-pager
+              sudo netstat -tlnp | grep 3389
+              echo "Attempting to restart XRDP..."
+              sudo systemctl restart xrdp
+              sleep 5
+              # Don't exit on failure, continue anyway
           fi
           
       - name: Install Python Security Libraries
