@@ -3,148 +3,103 @@ on:
   workflow_dispatch:
 jobs:
   secure-rdp:
-    runs-on: windows-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 3600
     steps:
       - name: Configure Core RDP Settings
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
-          Restart-Service -Name TermService -Force
-          
-      - name: Install WSL2 and Kali Linux
-        run: |
-          # Enable WSL2 feature
-          dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
-          dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
-          
-          # Download and install WSL2 kernel update
-          $wslUrl = "https://wslstorestorage.blob.core.windows.net/wslblob/wsl_update_x64.msi"
-          $wslPath = "$env:TEMP\wsl_update_x64.msi"
-          Invoke-WebRequest -Uri $wslUrl -OutFile $wslPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$wslPath`"", "/quiet", "/norestart" -Wait
-          
-          # Set WSL2 as default
-          wsl --set-default-version 2
-          
-          # Install Kali Linux
-          Invoke-WebRequest -Uri "https://aka.ms/kali-linux-ws" -OutFile "$env:TEMP\kali.appx" -UseBasicParsing
-          Add-AppxPackage -Path "$env:TEMP\kali.appx"
-          
-          # Initialize Kali Linux
-          kali.exe install --root
-          
-          Write-Host "Kali Linux installed in WSL2"
-          
-      - name: Setup Kali Linux Environment
-        run: |
-          # Update Kali and install tools
-          kali.exe run "apt update && apt upgrade -y"
-          kali.exe run "apt install -y kali-linux-core metasploit-framework nmap wireshark burpsuite sqlmap"
-          kali.exe run "apt install -y xfce4 xfce4-goodies xrdp"
-          
-          # Configure XRDP in Kali
-          kali.exe run "systemctl enable xrdp"
-          kali.exe run "echo 'startxfce4' > ~/.xsession"
-          kali.exe run "chmod +x ~/.xsession"
-          
-          # Setup port forwarding from Windows to WSL
-          netsh interface portproxy add v4tov4 listenport=3390 listenaddress=0.0.0.0 connectport=3389 connectaddress=127.0.0.1
-          netsh advfirewall firewall add rule name="WSL-Kali-RDP" dir=in action=allow protocol=TCP localport=3390
-          
-          Write-Host "Kali Linux environment configured"
+          # Install and configure XRDP
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xrdp xfce4 xfce4-goodies
+          sudo systemctl enable xrdp
+          sudo systemctl start xrdp
+          echo "startxfce4" | sudo tee /etc/skel/.xsession
+          sudo ufw allow 3389/tcp
+          sudo ufw --force enable
           
       - name: Create RDP User with Static Password
         run: |
-          $password = "admin@123"
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          if (-not (Get-LocalUser -Name "TOOLBOXLAP" -ErrorAction SilentlyContinue)) {
-              New-LocalUser -Name "TOOLBOXLAP" -Password $securePass -AccountNeverExpires
-          }
-          Add-LocalGroupMember -Group "Administrators" -Member "TOOLBOXLAP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "TOOLBOXLAP"
-          
-          # Also create user in Kali Linux
-          kali.exe run "useradd -m -s /bin/bash TOOLBOXLAP"
-          kali.exe run "echo 'TOOLBOXLAP:admin@123' | chpasswd"
-          kali.exe run "usermod -aG sudo TOOLBOXLAP"
-          kali.exe run "echo 'startxfce4' > /home/TOOLBOXLAP/.xsession"
-          kali.exe run "chmod +x /home/TOOLBOXLAP/.xsession"
-          
-          echo "RDP_CREDS=User: TOOLBOXLAP | Password: $password" >> $env:GITHUB_ENV
+          password="admin@123"
+          sudo useradd -m -s /bin/bash TOOLBOXLAP
+          echo "TOOLBOXLAP:$password" | sudo chpasswd
+          sudo usermod -aG sudo TOOLBOXLAP
+          echo "startxfce4" | sudo tee /home/TOOLBOXLAP/.xsession
+          sudo chmod +x /home/TOOLBOXLAP/.xsession
+          sudo chown TOOLBOXLAP:TOOLBOXLAP /home/TOOLBOXLAP/.xsession
+          echo "RDP_CREDS=User: TOOLBOXLAP | Password: $password" >> $GITHUB_ENV
+          if ! id "TOOLBOXLAP" &>/dev/null; then
+              echo "User creation failed"
+              exit 1
+          fi
           
       - name: Install Tailscale
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+          sudo apt-get update
+          sudo apt-get install -y tailscale
           
       - name: Establish Tailscale Connection
         run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=kali-runner-$env:GITHUB_RUN_ID
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
-              $retries++
-          }
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=kali-runner-$GITHUB_RUN_ID
+          sleep 10
+          tsIP=$(tailscale ip -4)
+          retries=0
+          while [ -z "$tsIP" ] && [ $retries -lt 10 ]; do
+              sleep 5
+              tsIP=$(tailscale ip -4)
+              retries=$((retries + 1))
+          done
+          if [ -z "$tsIP" ]; then
+              echo "Tailscale IP not assigned. Exiting."
               exit 1
-          }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          fi
+          echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
           
-      - name: Start Kali Linux Services
+      - name: Install Kali Linux Tools
         run: |
-          # Start XRDP in Kali Linux
-          kali.exe run "service xrdp start"
+          # Install security tools
+          sudo apt-get install -y nmap netcat-traditional curl wget git vim python3 python3-pip
           
-          # Verify services are running
-          kali.exe run "service xrdp status"
+          # Install tools from binaries
+          cd /tmp
+          wget https://github.com/OJ/gobuster/releases/download/v3.6.0/gobuster_Linux_x86_64.tar.gz
+          tar -xzf gobuster_Linux_x86_64.tar.gz
+          sudo mv gobuster /usr/local/bin/
           
-          Write-Host "Kali Linux services started"
+          wget https://github.com/projectdiscovery/subfinder/releases/download/v2.6.3/subfinder_2.6.3_linux_amd64.zip
+          unzip subfinder_2.6.3_linux_amd64.zip
+          sudo mv subfinder /usr/local/bin/
+          
+          # Install Metasploit
+          curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > msfinstall
+          chmod 755 msfinstall
+          sudo ./msfinstall
           
       - name: Verify RDP Accessibility
         run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
+          echo "Tailscale IP: $TAILSCALE_IP"
+          timeout 10 bash -c "</dev/tcp/$TAILSCALE_IP/3389" 2>/dev/null
+          if [ $? -eq 0 ]; then
+              echo "TCP connectivity successful!"
+          else
+              echo "TCP connection to RDP port 3389 failed"
+              sudo systemctl status xrdp --no-pager
               exit 1
-          }
-          Write-Host "Windows RDP connectivity successful!"
-          
-          # Test Kali RDP port
-          $kaliTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3390
-          if ($kaliTest.TcpTestSucceeded) {
-              Write-Host "Kali Linux RDP (port 3390) connectivity successful!"
-          } else {
-              Write-Host "Kali Linux RDP port 3390 not accessible - check WSL configuration"
-          }
+          fi
           
       - name: Maintain Connection
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Windows Desktop:"
-          Write-Host "  Address: $env:TAILSCALE_IP:3389"
-          Write-Host "  Username: TOOLBOXLAP"
-          Write-Host "  Password: admin@123"
-          Write-Host ""
-          Write-Host "Kali Linux (via WSL2):"
-          Write-Host "  Address: $env:TAILSCALE_IP:3390"
-          Write-Host "  Username: TOOLBOXLAP"
-          Write-Host "  Password: admin@123"
-          Write-Host "  Desktop: XFCE4"
-          Write-Host ""
-          Write-Host "Access Kali via: Windows Terminal -> kali.exe"
-          Write-Host "==================`n"
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
-              Start-Sleep -Seconds 300
-          }
+          echo ""
+          echo "=== KALI TOOLS RDP ACCESS ==="
+          echo "Address: $TAILSCALE_IP"
+          echo "Username: TOOLBOXLAP"
+          echo "Password: admin@123"
+          echo "Desktop: XFCE4"
+          echo "Tools: Metasploit, Nmap, Gobuster, etc."
+          echo "=========================="
+          echo ""
+          while true; do
+              echo "[$(date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              sleep 300
+          done
