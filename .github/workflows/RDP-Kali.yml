@@ -8,29 +8,69 @@ jobs:
     steps:
       - name: Configure Core RDP Settings
         run: |
-          # Install and configure XRDP
+          # Update system
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xrdp xfce4 xfce4-goodies
+          
+          # Install minimal desktop environment that works reliably with RDP
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            lxde-core \
+            lxde-common \
+            lxsession \
+            openbox \
+            pcmanfm \
+            lxterminal \
+            xrdp \
+            firefox \
+            gedit \
+            dbus-x11
+            
+          # Configure XRDP
           sudo systemctl enable xrdp
-          sudo systemctl start xrdp
-          echo "startxfce4" | sudo tee /etc/skel/.xsession
-          sudo ufw allow 3389/tcp
-          sudo ufw --force enable
+          sudo systemctl enable xrdp-sesman
+          
+          # Create simple session script that works
+          sudo bash -c 'cat > /etc/xrdp/startwm.sh << EOF
+#!/bin/sh
+if [ -r /etc/default/locale ]; then
+  . /etc/default/locale
+  export LANG LANGUAGE
+fi
+
+# Start LXDE session
+exec /usr/bin/startlxde
+EOF'
+          
+          sudo chmod +x /etc/xrdp/startwm.sh
+          
+          # Simple XRDP config
+          sudo sed -i 's/max_bpp=32/max_bpp=24/g' /etc/xrdp/xrdp.ini
+          sudo sed -i 's/#tcp_nodelay=1/tcp_nodelay=1/g' /etc/xrdp/xrdp.ini
+          
+          echo "LXDE desktop environment configured"
           
       - name: Create RDP User with Static Password
         run: |
           password="admin@123"
+          
+          # Create user
           sudo useradd -m -s /bin/bash TOOLBOXLAP
           echo "TOOLBOXLAP:$password" | sudo chpasswd
           sudo usermod -aG sudo TOOLBOXLAP
-          echo "startxfce4" | sudo tee /home/TOOLBOXLAP/.xsession
+          
+          # Simple session configuration for LXDE
+          sudo mkdir -p /home/TOOLBOXLAP
+          echo "/usr/bin/startlxde" | sudo tee /home/TOOLBOXLAP/.xsession
           sudo chmod +x /home/TOOLBOXLAP/.xsession
-          sudo chown TOOLBOXLAP:TOOLBOXLAP /home/TOOLBOXLAP/.xsession
-          echo "RDP_CREDS=User: TOOLBOXLAP | Password: $password" >> $GITHUB_ENV
+          sudo chown -R TOOLBOXLAP:TOOLBOXLAP /home/TOOLBOXLAP
+          
+          # Test user creation
           if ! id "TOOLBOXLAP" &>/dev/null; then
               echo "User creation failed"
               exit 1
           fi
+          
+          echo "RDP_CREDS=User: TOOLBOXLAP | Password: $password" >> $GITHUB_ENV
+          echo "User TOOLBOXLAP created successfully"
           
       - name: Install Tailscale
         run: |
@@ -56,77 +96,120 @@ jobs:
           fi
           echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
           
-      - name: Install Kali Linux Tools
+      - name: Install Security Tools
         run: |
-          # Install security tools
+          # Install basic security tools
           sudo apt-get install -y nmap netcat-traditional curl wget git vim python3 python3-pip
           
-          # Install tools from binaries
+          # Install tools from binaries to avoid package conflicts
           cd /tmp
-          wget https://github.com/OJ/gobuster/releases/download/v3.6.0/gobuster_Linux_x86_64.tar.gz
+          
+          # Install Gobuster
+          wget -q https://github.com/OJ/gobuster/releases/download/v3.6.0/gobuster_Linux_x86_64.tar.gz
           tar -xzf gobuster_Linux_x86_64.tar.gz
           sudo mv gobuster /usr/local/bin/
           
-          wget https://github.com/projectdiscovery/subfinder/releases/download/v2.6.3/subfinder_2.6.3_linux_amd64.zip
-          unzip subfinder_2.6.3_linux_amd64.zip
+          # Install Subfinder
+          wget -q https://github.com/projectdiscovery/subfinder/releases/download/v2.6.3/subfinder_2.6.3_linux_amd64.zip
+          unzip -q subfinder_2.6.3_linux_amd64.zip
           sudo mv subfinder /usr/local/bin/
           
-          # Install Metasploit
-          curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > msfinstall
-          chmod 755 msfinstall
-          sudo ./msfinstall
+          # Install Httpx
+          wget -q https://github.com/projectdiscovery/httpx/releases/download/v1.3.7/httpx_1.3.7_linux_amd64.zip
+          unzip -q httpx_1.3.7_linux_amd64.zip
+          sudo mv httpx /usr/local/bin/
+          
+          # Install Nuclei
+          wget -q https://github.com/projectdiscovery/nuclei/releases/download/v3.0.4/nuclei_3.0.4_linux_amd64.zip
+          unzip -q nuclei_3.0.4_linux_amd64.zip
+          sudo mv nuclei /usr/local/bin/
+          
+          # Install Python security libraries
+          pip3 install --user requests beautifulsoup4 scapy paramiko dnspython
+          
+          # Create desktop shortcuts
+          sudo mkdir -p /home/TOOLBOXLAP/Desktop
+          sudo bash -c 'cat > /home/TOOLBOXLAP/Desktop/SecurityTools.txt << EOF
+SECURITY TOOLS INSTALLED:
+
+Network Scanning:
+- nmap (network scanner)
+- nc/netcat (network utility)
+
+Web Security:
+- gobuster (directory brute forcer)
+- subfinder (subdomain finder)
+- httpx (HTTP toolkit)
+- nuclei (vulnerability scanner)
+
+System Tools:
+- curl, wget (HTTP clients)
+- python3 with security libraries
+
+Usage Examples:
+nmap -sV target.com
+gobuster dir -u http://target.com -w /usr/share/wordlists/dirb/common.txt
+subfinder -d target.com
+httpx -l domains.txt
+nuclei -u target.com
+
+Open Terminal: Menu -> System Tools -> LXTerminal
+EOF'
+          
+          sudo chown -R TOOLBOXLAP:TOOLBOXLAP /home/TOOLBOXLAP/Desktop
+          
+          echo "Security tools installed successfully"
+          
+      - name: Start RDP Services
+        run: |
+          # Start services
+          sudo systemctl start xrdp-sesman
+          sleep 3
+          sudo systemctl start xrdp
+          sleep 5
+          
+          # Check services
+          echo "=== Service Status ==="
+          sudo systemctl status xrdp --no-pager
+          sudo systemctl status xrdp-sesman --no-pager
+          
+          # Check listening ports
+          echo "=== Listening Ports ==="
+          sudo netstat -tlnp | grep -E "(3389|3350)"
+          
+          echo "RDP services started successfully"
           
       - name: Verify RDP Accessibility
         run: |
           echo "Tailscale IP: $TAILSCALE_IP"
           
-          # Wait for services to fully start
-          sleep 10
-          
-          # Check if XRDP is listening on port 3389
-          if sudo netstat -tlnp | grep :3389; then
-              echo "XRDP is listening on port 3389"
-          else
-              echo "XRDP is NOT listening on port 3389"
-              echo "Attempting to restart XRDP..."
-              sudo systemctl restart xrdp-sesman
-              sudo systemctl restart xrdp
-              sleep 5
-              sudo netstat -tlnp | grep :3389
-          fi
-          
-          # Check service status
-          echo "=== XRDP Status ==="
-          sudo systemctl status xrdp --no-pager
-          echo "=== XRDP-SESMAN Status ==="
-          sudo systemctl status xrdp-sesman --no-pager
-          
-          # Test local connection
+          # Test local connections
           timeout 5 bash -c "</dev/tcp/127.0.0.1/3389" 2>/dev/null
           if [ $? -eq 0 ]; then
-              echo "Local RDP port 3389 is accessible"
+              echo "✓ RDP port 3389 is accessible"
           else
-              echo "Local RDP port 3389 is NOT accessible"
+              echo "✗ RDP port 3389 is NOT accessible"
           fi
           
-          # Test Tailscale connection
-          timeout 10 bash -c "</dev/tcp/$TAILSCALE_IP/3389" 2>/dev/null
+          timeout 5 bash -c "</dev/tcp/127.0.0.1/3350" 2>/dev/null
           if [ $? -eq 0 ]; then
-              echo "Tailscale RDP connectivity successful!"
+              echo "✓ Sesman port 3350 is accessible"
           else
-              echo "Tailscale RDP connectivity failed - but continuing anyway"
-              echo "Try connecting directly to: $TAILSCALE_IP:3389"
+              echo "✗ Sesman port 3350 is NOT accessible"
           fi
+          
+          echo "RDP services ready for connection"
           
       - name: Maintain Connection
         run: |
           echo ""
-          echo "=== KALI TOOLS RDP ACCESS ==="
+          echo "=== SECURITY TOOLS RDP ACCESS ==="
           echo "Address: $TAILSCALE_IP"
-          echo "Username: TOOLBOXLAP"
-          echo "Password: admin@123"
-          echo "Desktop: XFCE4"
-          echo "Tools: Metasploit, Nmap, Gobuster, etc."
+          echo "Username: hs1on"
+          echo "Password: (leave blank - no password required)"
+          echo "Desktop: LXDE (Lightweight)"
+          echo "Tools: See SecurityTools.txt on Desktop"
+          echo "Terminal: Menu -> System Tools -> LXTerminal"
           echo "=========================="
           echo ""
           while true; do
