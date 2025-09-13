@@ -1,85 +1,110 @@
-name: RDP Kali Linux
+name: RDP  # Keeping your naming convention
 on:
   workflow_dispatch:
 jobs:
   secure-rdp:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest  # Changed from windows-latest
     timeout-minutes: 3600
     steps:
-      - name: Configure Core RDP Settings
+      - name: Configure SSH Server (Linux RDP Equivalent)
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y kali-desktop-xfce xrdp ufw
-          
-          # Enable and start xrdp
-          sudo systemctl enable xrdp
-          sudo systemctl start xrdp
-          
-          # Configure RDP to use XFCE
-          echo "startxfce4" | sudo tee /etc/skel/.xsession
-          echo "startxfce4" | sudo tee /root/.xsession
-          sudo sed -i.bak '/^new_cursors=true/c\new_cursors=false' /etc/xrdp/xrdp.ini
-          
-          # Open firewall for RDP
-          sudo ufw allow 3389/tcp
-          sudo ufw reload
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
+          sudo systemctl enable ssh
+          sudo systemctl start ssh
 
-      - name: Create RDP User with Static Password
+          # Optional: Allow root login (not recommended for prod, but for lab)
+          echo "PermitRootLogin yes" | sudo tee -a /etc/ssh/sshd_config
+          echo "PasswordAuthentication yes" | sudo tee -a /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+
+      - name: Create SSH User with Static Password
         run: |
-          USER="TOOLBOXLAP"
           PASSWORD="admin@123"
-          
-          if ! id -u "$USER" >/dev/null 2>&1; then
-              sudo useradd -m -s /bin/bash "$USER"
-              echo "$USER:$PASSWORD" | sudo chpasswd
-              sudo usermod -aG sudo "$USER"
+          USERNAME="TOOLBOXLAP"
+
+          # Create user if doesn't exist
+          if ! id "$USERNAME" &>/dev/null; then
+              sudo useradd -m -s /bin/bash "$USERNAME"
+              echo "$USERNAME:$PASSWORD" | sudo chpasswd
           fi
 
-          echo "RDP_CREDS=User: $USER | Password: $PASSWORD" >> $GITHUB_ENV
+          # Add to sudo group
+          sudo usermod -aG sudo "$USERNAME"
 
-          if ! id -u "$USER" >/dev/null 2>&1; then
-              echo "User creation failed"
+          # Export creds to GitHub env
+          echo "RDP_CREDS=User: $USERNAME | Password: $PASSWORD" >> $GITHUB_ENV
+
+          # Verify user exists
+          if ! id "$USERNAME" &>/dev/null; then
+              echo "User creation failed" >&2
               exit 1
           fi
 
       - name: Install Tailscale
         run: |
-          curl -fsSL https://tailscale.com/install.sh | sh
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+          sudo apt-get update
+          sudo apt-get install -y tailscale
 
       - name: Establish Tailscale Connection
         run: |
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-${GITHUB_RUN_ID}
-          TS_IP=""
-          RETRIES=0
-          while [ -z "$TS_IP" ] && [ $RETRIES -lt 10 ]; do
-              TS_IP=$(tailscale ip -4)
+
+          TAILSCALE_IP=""
+          retries=0
+          while [ -z "$TAILSCALE_IP" ] && [ $retries -lt 10 ]; do
+              TAILSCALE_IP=$(tailscale ip -4 2>/dev/null)
               sleep 5
-              RETRIES=$((RETRIES + 1))
+              retries=$((retries + 1))
           done
-          if [ -z "$TS_IP" ]; then
-              echo "Tailscale IP not assigned. Exiting."
+
+          if [ -z "$TAILSCALE_IP" ]; then
+              echo "Tailscale IP not assigned. Exiting." >&2
               exit 1
           fi
-          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Verify RDP Accessibility
+          echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
+
+      - name: Verify SSH Accessibility
         run: |
           echo "Tailscale IP: $TAILSCALE_IP"
-          nc -zv -w5 $TAILSCALE_IP 3389
+          nc -zv $TAILSCALE_IP 22
           if [ $? -ne 0 ]; then
-              echo "TCP connection to RDP port 3389 failed"
+              echo "SSH port 22 unreachable" >&2
               exit 1
           fi
-          echo "TCP connectivity successful!"
+          echo "SSH connectivity successful!"
+
+      - name: (Optional) Install GUI + xRDP for Desktop Access (Kali Desktop)
+        run: |
+          # Install Kali desktop + xRDP (heavy, skip if SSH-only)
+          sudo apt-get install -y kali-desktop-xfce xrdp
+          sudo systemctl enable xrdp
+          sudo systemctl start xrdp
+
+          # Set password for xRDP (same user)
+          echo "TOOLBOXLAP:admin@123" | sudo chpasswd
+
+          echo "xRDP installed. Connect via RDP client to $TAILSCALE_IP port 3389 (if forwarded)."
 
       - name: Maintain Connection
         run: |
-          echo -e "\n=== RDP ACCESS ==="
+          echo
+          echo "=== SSH ACCESS (Your 'Linux RDP') ==="
           echo "Address: $TAILSCALE_IP"
           echo "Username: TOOLBOXLAP"
           echo "Password: admin@123"
-          echo "==================\n"
+          echo "Port: 22 (SSH) — Use: ssh TOOLBOXLAP@$TAILSCALE_IP"
+          echo
+          if systemctl is-active --quiet xrdp; then
+              echo "GUI via xRDP: Connect to $TAILSCALE_IP:3389"
+          fi
+          echo "======================================"
+          echo
+
           while true; do
-              echo "[$(date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              echo "[$(date)] SSH Active - Use Ctrl+C in workflow to terminate"
               sleep 300
           done
