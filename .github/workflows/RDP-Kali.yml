@@ -10,95 +10,48 @@ jobs:
     steps:
       - name: Configure Core RDP Settings
         run: |
-          set -euo pipefail
-
-          # Update system
           sudo apt-get update -y
-
-          # Install minimal desktop environment (XFCE) that works reliably with XRDP
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            xfce4 \
-            xfce4-goodies \
-            xrdp \
-            firefox \
-            gedit \
-            dbus-x11 \
-            net-tools \
-            unzip \
-            curl \
-            wget
+            xfce4 xfce4-goodies xrdp \
+            firefox gedit dbus-x11 \
+            net-tools unzip curl wget
 
-          # Enable XRDP services
           sudo systemctl enable xrdp
           sudo systemctl enable xrdp-sesman
 
-          # Create XRDP start script to launch XFCE session
           sudo bash -c 'cat > /etc/xrdp/startwm.sh << EOF
 #!/bin/sh
 if [ -r /etc/default/locale ]; then
   . /etc/default/locale
   export LANG LANGUAGE
 fi
-
-# Start XFCE session
 exec /usr/bin/startxfce4
 EOF'
           sudo chmod +x /etc/xrdp/startwm.sh
 
-          # Adjust XRDP config for better compatibility
           sudo sed -i 's/max_bpp=32/max_bpp=24/g' /etc/xrdp/xrdp.ini || true
           sudo sed -i 's/#tcp_nodelay=1/tcp_nodelay=1/g' /etc/xrdp/xrdp.ini || true
 
-          echo "XFCE + XRDP configured"
-
-      - name: Create RDP User (from secrets or fallback)
+      - name: Create RDP User
         run: |
-          set -euo pipefail
+          username="${{ secrets.RDP_USER || 'hs1on' }}"
+          password="${{ secrets.RDP_PASSWORD || 'admin@123' }}"
 
-          # choose username and password from secrets if provided, otherwise fallback
-          username="${{ secrets.RDP_USER || '' }}"
-          password="${{ secrets.RDP_PASSWORD || '' }}"
-
-          if [ -z "$username" ]; then
-            username="hs1on"
-          fi
-
-          if [ -z "$password" ]; then
-            # generate a reasonably strong temporary password if none provided
-            password="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9!@#%&' | cut -c1-24)"
-            echo "No RDP password provided via secrets; generated a temporary password."
-          fi
-
-          # Create user if doesn't exist
-          if id "$username" &>/dev/null; then
-            echo "User $username already exists, skipping creation."
-          else
+          if ! id "$username" &>/dev/null; then
             sudo useradd -m -s /bin/bash "$username"
             echo "$username:$password" | sudo chpasswd
             sudo usermod -aG sudo "$username"
-            echo "Created user $username"
           fi
 
-          # Ensure .xsession launches XFCE
-          sudo -u "$username" bash -c 'mkdir -p "$HOME"; echo "/usr/bin/startxfce4" > "$HOME/.xsession"; chmod +x "$HOME/.xsession"'
+          echo "/usr/bin/startxfce4" | sudo tee /home/$username/.xsession
+          sudo chown -R $username:$username /home/$username
+          chmod +x /home/$username/.xsession
 
-          # expose credentials as environment variables for later steps (vault/CI only)
           echo "RDP_USER=$username" >> $GITHUB_ENV
           echo "RDP_PASSWORD=$password" >> $GITHUB_ENV
 
-          # sanity-check
-          if ! id "$username" &>/dev/null; then
-            echo "User creation failed"
-            exit 1
-          fi
-
-          echo "User $username ready for RDP"
-
       - name: Install Tailscale
         run: |
-          set -euo pipefail
-
-          # Add Tailscale repo & install (Ubuntu 22.04 -> jammy)
           curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
           curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
           sudo apt-get update -y
@@ -108,152 +61,67 @@ EOF'
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          set -euo pipefail
-
-          if [ -z "${TAILSCALE_AUTH_KEY:-}" ]; then
-            echo "ERROR: TAILSCALE_AUTH_KEY secret not provided."
-            exit 1
-          fi
-
-          sudo tailscale up --authkey="$TAILSCALE_AUTH_KEY" --hostname="kali-runner-$GITHUB_RUN_ID" || true
-          # wait for an IPv4 address
-          tsIP=""
-          retries=0
-          while [ -z "$tsIP" ] && [ $retries -lt 12 ]; do
-            sleep 5
+          sudo tailscale up --authkey=$TAILSCALE_AUTH_KEY --hostname="kali-runner-$GITHUB_RUN_ID" || true
+          for i in {1..12}; do
             tsIP=$(tailscale ip -4 || true)
-            retries=$((retries + 1))
+            [ -n "$tsIP" ] && break
+            sleep 5
           done
-
-          if [ -z "$tsIP" ]; then
-            echo "Tailscale IP not assigned. Exiting."
-            exit 1
-          fi
-
+          [ -z "$tsIP" ] && { echo "Tailscale IP not assigned"; exit 1; }
           echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
           echo "Tailscale IP: $tsIP"
 
       - name: Install Security Tools
         run: |
-          set -euo pipefail
-
-          sudo apt-get update -y
           sudo apt-get install -y nmap netcat-traditional git vim python3 python3-pip
-
           cd /tmp
 
-          # Gobuster
-          if [ ! -f /usr/local/bin/gobuster ]; then
-            wget -q https://github.com/OJ/gobuster/releases/download/v3.6.0/gobuster_Linux_x86_64.tar.gz
-            tar -xzf gobuster_Linux_x86_64.tar.gz
-            sudo mv gobuster /usr/local/bin/ || true
-          fi
+          wget -q https://github.com/OJ/gobuster/releases/download/v3.6.0/gobuster_Linux_x86_64.tar.gz
+          tar -xzf gobuster_Linux_x86_64.tar.gz && sudo mv gobuster /usr/local/bin/
 
-          # Subfinder
-          if [ ! -f /usr/local/bin/subfinder ]; then
-            wget -q https://github.com/projectdiscovery/subfinder/releases/download/v2.6.3/subfinder_2.6.3_linux_amd64.zip
-            unzip -q subfinder_2.6.3_linux_amd64.zip
-            sudo mv subfinder /usr/local/bin/ || true
-          fi
+          wget -q https://github.com/projectdiscovery/subfinder/releases/download/v2.6.3/subfinder_2.6.3_linux_amd64.zip
+          unzip -q subfinder_2.6.3_linux_amd64.zip && sudo mv subfinder /usr/local/bin/
 
-          # Httpx
-          if [ ! -f /usr/local/bin/httpx ]; then
-            wget -q https://github.com/projectdiscovery/httpx/releases/download/v1.3.7/httpx_1.3.7_linux_amd64.zip
-            unzip -q httpx_1.3.7_linux_amd64.zip
-            sudo mv httpx /usr/local/bin/ || true
-          fi
+          wget -q https://github.com/projectdiscovery/httpx/releases/download/v1.3.7/httpx_1.3.7_linux_amd64.zip
+          unzip -q httpx_1.3.7_linux_amd64.zip && sudo mv httpx /usr/local/bin/
 
-          # Nuclei
-          if [ ! -f /usr/local/bin/nuclei ]; then
-            wget -q https://github.com/projectdiscovery/nuclei/releases/download/v3.0.4/nuclei_3.0.4_linux_amd64.zip
-            unzip -q nuclei_3.0.4_linux_amd64.zip
-            sudo mv nuclei /usr/local/bin/ || true
-          fi
+          wget -q https://github.com/projectdiscovery/nuclei/releases/download/v3.0.4/nuclei_3.0.4_linux_amd64.zip
+          unzip -q nuclei_3.0.4_linux_amd64.zip && sudo mv nuclei /usr/local/bin/
 
-          # Python libraries
           pip3 install --user requests beautifulsoup4 scapy paramiko dnspython || true
 
-          # Desktop info file for user
-          sudo -u "$RDP_USER" bash -c 'mkdir -p "$HOME/Desktop"'
-          sudo bash -c 'cat > /home/'"$RDP_USER"'/Desktop/SecurityTools.txt << EOF
+          sudo -u $RDP_USER mkdir -p /home/$RDP_USER/Desktop
+          cat <<EOF | sudo tee /home/$RDP_USER/Desktop/SecurityTools.txt
 SECURITY TOOLS INSTALLED:
-
-Network Scanning:
-- nmap (network scanner)
-- nc/netcat (network utility)
-
-Web Security:
-- gobuster (directory brute forcer)
-- subfinder (subdomain finder)
-- httpx (HTTP toolkit)
-- nuclei (vulnerability scanner)
-
-System Tools:
-- curl, wget (HTTP clients)
-- python3 with security libraries
-
-Usage Examples:
-nmap -sV target.com
-gobuster dir -u http://target.com -w /usr/share/wordlists/dirb/common.txt
-subfinder -d target.com
-httpx -l domains.txt
-nuclei -u target.com
-
-Open Terminal: Applications -> Terminal
-EOF'
-          sudo chown -R "$RDP_USER:$RDP_USER" /home/"$RDP_USER"/Desktop || true
-
-          echo "Security tools installed"
+- nmap, nc
+- gobuster, subfinder, httpx, nuclei
+- python3 + libs
+EOF
+          sudo chown -R $RDP_USER:$RDP_USER /home/$RDP_USER/Desktop
 
       - name: Start RDP Services
         run: |
-          set -euo pipefail
-          sudo systemctl start xrdp-sesman || true
+          sudo systemctl start xrdp-sesman
           sleep 3
-          sudo systemctl start xrdp || true
+          sudo systemctl start xrdp
           sleep 5
-
-          echo "=== Service Status ==="
-          sudo systemctl status xrdp --no-pager || true
-          sudo systemctl status xrdp-sesman --no-pager || true
-
-          echo "=== Listening Ports ==="
           sudo netstat -tlnp | grep -E "(3389|3350)" || true
 
       - name: Verify RDP Accessibility
         run: |
-          set -euo pipefail
           echo "Tailscale IP: $TAILSCALE_IP"
+          (timeout 5 bash -c "</dev/tcp/127.0.0.1/3389") && echo "3389 open"
+          (timeout 5 bash -c "</dev/tcp/127.0.0.1/3350") && echo "3350 open"
 
-          timeout 5 bash -c "</dev/tcp/127.0.0.1/3389" 2>/dev/null
-          if [ $? -eq 0 ]; then
-            echo "✓ RDP port 3389 is accessible"
-          else
-            echo "✗ RDP port 3389 is NOT accessible"
-          fi
-
-          timeout 5 bash -c "</dev/tcp/127.0.0.1/3350" 2>/dev/null
-          if [ $? -eq 0 ]; then
-            echo "✓ Sesman port 3350 is accessible"
-          else
-            echo "✗ Sesman port 3350 is NOT accessible"
-          fi
-
-      - name: Maintain Connection (prints connection info)
+      - name: Maintain Connection
         run: |
-          set -euo pipefail
-          echo ""
           echo "=== SECURITY TOOLS RDP ACCESS ==="
           echo "Address: $TAILSCALE_IP"
           echo "Username: $RDP_USER"
-          echo "Password: (stored in workflow env variable RDP_PASSWORD)"
-          echo "Desktop: XFCE (Lightweight)"
-          echo "Tools: See SecurityTools.txt on Desktop"
-          echo "Terminal: Applications -> Terminal"
-          echo "=========================="
-          echo ""
-          # Keep the job alive until manually cancelled (prints heartbeat every 5 minutes)
+          echo "Password: $RDP_PASSWORD"
+          echo "Desktop: XFCE"
+          echo "================================="
           while true; do
-            echo "[$(date)] RDP Active - Use Ctrl+C in workflow or cancel the workflow run to terminate"
+            echo "[$(date)] RDP Active"
             sleep 300
           done
