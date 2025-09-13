@@ -1,4 +1,4 @@
-name: RDP
+name: RDP-Kali
 
 on:
   workflow_dispatch:
@@ -7,8 +7,9 @@ jobs:
   secure-rdp:
     runs-on: ubuntu-22.04
     timeout-minutes: 3600
+
     steps:
-      - name: Configure Core RDP Settings
+      - name: Setup Desktop + XRDP
         run: |
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -16,10 +17,9 @@ jobs:
             firefox gedit dbus-x11 \
             net-tools unzip curl wget
 
-          sudo systemctl enable xrdp
-          sudo systemctl enable xrdp-sesman
+          sudo systemctl enable xrdp xrdp-sesman
 
-          sudo bash -c 'cat > /etc/xrdp/startwm.sh << EOF
+          sudo bash -c 'cat > /etc/xrdp/startwm.sh <<EOF
 #!/bin/sh
 if [ -r /etc/default/locale ]; then
   . /etc/default/locale
@@ -29,26 +29,23 @@ exec /usr/bin/startxfce4
 EOF'
           sudo chmod +x /etc/xrdp/startwm.sh
 
-          sudo sed -i 's/max_bpp=32/max_bpp=24/g' /etc/xrdp/xrdp.ini || true
-          sudo sed -i 's/#tcp_nodelay=1/tcp_nodelay=1/g' /etc/xrdp/xrdp.ini || true
-
       - name: Create RDP User
         run: |
-          username="${{ secrets.RDP_USER || 'hs1on' }}"
-          password="${{ secrets.RDP_PASSWORD || 'admin@123' }}"
+          USERNAME="${{ secrets.RDP_USER || 'hs1on' }}"
+          PASSWORD="${{ secrets.RDP_PASSWORD || 'admin@123' }}"
 
-          if ! id "$username" &>/dev/null; then
-            sudo useradd -m -s /bin/bash "$username"
-            echo "$username:$password" | sudo chpasswd
-            sudo usermod -aG sudo "$username"
+          if ! id "$USERNAME" &>/dev/null; then
+            sudo useradd -m -s /bin/bash "$USERNAME"
+            echo "$USERNAME:$PASSWORD" | sudo chpasswd
+            sudo usermod -aG sudo "$USERNAME"
           fi
 
-          echo "/usr/bin/startxfce4" | sudo tee /home/$username/.xsession
-          sudo chown -R $username:$username /home/$username
-          chmod +x /home/$username/.xsession
+          echo "/usr/bin/startxfce4" | sudo tee /home/$USERNAME/.xsession
+          sudo chown -R $USERNAME:$USERNAME /home/$USERNAME
+          sudo chmod +x /home/$USERNAME/.xsession
 
-          echo "RDP_USER=$username" >> $GITHUB_ENV
-          echo "RDP_PASSWORD=$password" >> $GITHUB_ENV
+          echo "RDP_USER=$USERNAME" >> $GITHUB_ENV
+          echo "RDP_PASSWORD=$PASSWORD" >> $GITHUB_ENV
 
       - name: Install Tailscale
         run: |
@@ -57,7 +54,7 @@ EOF'
           sudo apt-get update -y
           sudo apt-get install -y tailscale
 
-      - name: Establish Tailscale Connection
+      - name: Connect to Tailscale
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
@@ -67,15 +64,15 @@ EOF'
             [ -n "$tsIP" ] && break
             sleep 5
           done
-          [ -z "$tsIP" ] && { echo "Tailscale IP not assigned"; exit 1; }
+          [ -z "$tsIP" ] && { echo "No Tailscale IP assigned"; exit 1; }
           echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
           echo "Tailscale IP: $tsIP"
 
       - name: Install Security Tools
         run: |
           sudo apt-get install -y nmap netcat-traditional git vim python3 python3-pip
-          cd /tmp
 
+          cd /tmp
           wget -q https://github.com/OJ/gobuster/releases/download/v3.6.0/gobuster_Linux_x86_64.tar.gz
           tar -xzf gobuster_Linux_x86_64.tar.gz && sudo mv gobuster /usr/local/bin/
 
@@ -92,14 +89,14 @@ EOF'
 
           sudo -u $RDP_USER mkdir -p /home/$RDP_USER/Desktop
           cat <<EOF | sudo tee /home/$RDP_USER/Desktop/SecurityTools.txt
-SECURITY TOOLS INSTALLED:
+Security Tools Installed:
 - nmap, nc
 - gobuster, subfinder, httpx, nuclei
-- python3 + libs
+- python3 + security libraries
 EOF
           sudo chown -R $RDP_USER:$RDP_USER /home/$RDP_USER/Desktop
 
-      - name: Start RDP Services
+      - name: Start RDP
         run: |
           sudo systemctl start xrdp-sesman
           sleep 3
@@ -107,20 +104,20 @@ EOF
           sleep 5
           sudo netstat -tlnp | grep -E "(3389|3350)" || true
 
-      - name: Verify RDP Accessibility
+      - name: Verify RDP
         run: |
           echo "Tailscale IP: $TAILSCALE_IP"
-          (timeout 5 bash -c "</dev/tcp/127.0.0.1/3389") && echo "3389 open"
-          (timeout 5 bash -c "</dev/tcp/127.0.0.1/3350") && echo "3350 open"
+          timeout 5 bash -c "</dev/tcp/127.0.0.1/3389" && echo "3389 open"
+          timeout 5 bash -c "</dev/tcp/127.0.0.1/3350" && echo "3350 open"
 
-      - name: Maintain Connection
+      - name: Maintain Session
         run: |
-          echo "=== SECURITY TOOLS RDP ACCESS ==="
+          echo "=== RDP ACCESS INFO ==="
           echo "Address: $TAILSCALE_IP"
           echo "Username: $RDP_USER"
           echo "Password: $RDP_PASSWORD"
           echo "Desktop: XFCE"
-          echo "================================="
+          echo "========================"
           while true; do
             echo "[$(date)] RDP Active"
             sleep 300
