@@ -1,4 +1,4 @@
-name: RDP-k
+name: RDP
 on:
   workflow_dispatch:
 jobs:
@@ -6,21 +6,76 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3600
     steps:
-      - name: Install Kali Linux Environment
+      - name: Install Desktop Environment and RDP
         run: |
-          # Update system packages
+          # Update package lists
           sudo apt-get update
           
-          # Install Kali Linux keyring and repository
-          wget -q -O - https://archive.kali.org/archive-key.asc | sudo apt-key add -
-          echo "deb https://http.kali.org/kali kali-rolling main non-free contrib" | sudo tee /etc/apt/sources.list.d/kali.list
-          sudo apt-get update
+          # Install desktop environment without problematic packages
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            xfce4-session \
+            xfce4-panel \
+            xfce4-terminal \
+            xfce4-settings \
+            xfwm4 \
+            thunar \
+            xrdp \
+            firefox \
+            gedit
           
-          # Install essential Kali tools and desktop environment
-          sudo apt-get install -y kali-linux-core kali-desktop-xfce xrdp
+          echo "Desktop environment installed successfully"
           
-          # Install additional security tools
-          sudo apt-get install -y nmap metasploit-framework wireshark burpsuite sqlmap
+      - name: Install Security Tools (Safe Method)
+        run: |
+          # Install tools that are guaranteed to work on Ubuntu
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            nmap \
+            netcat-traditional \
+            curl \
+            wget \
+            git \
+            vim \
+            htop \
+            net-tools \
+            dnsutils \
+            whois \
+            traceroute \
+            telnet \
+            ftp \
+            ssh \
+            python3 \
+            python3-pip \
+            build-essential
+            
+          echo "Basic security tools installed successfully"
+          
+      - name: Install Additional Tools from Source
+        run: |
+          # Create tools directory
+          mkdir -p /tmp/security-tools
+          cd /tmp/security-tools
+          
+          # Install Gobuster
+          wget https://github.com/OJ/gobuster/releases/download/v3.6.0/gobuster_Linux_x86_64.tar.gz
+          tar -xzf gobuster_Linux_x86_64.tar.gz
+          sudo mv gobuster /usr/local/bin/
+          
+          # Install Subfinder
+          wget https://github.com/projectdiscovery/subfinder/releases/download/v2.6.3/subfinder_2.6.3_linux_amd64.zip
+          unzip subfinder_2.6.3_linux_amd64.zip
+          sudo mv subfinder /usr/local/bin/
+          
+          # Install Httpx
+          wget https://github.com/projectdiscovery/httpx/releases/download/v1.3.7/httpx_1.3.7_linux_amd64.zip
+          unzip httpx_1.3.7_linux_amd64.zip
+          sudo mv httpx /usr/local/bin/
+          
+          # Install Nuclei
+          wget https://github.com/projectdiscovery/nuclei/releases/download/v3.0.4/nuclei_3.0.4_linux_amd64.zip
+          unzip nuclei_3.0.4_linux_amd64.zip
+          sudo mv nuclei /usr/local/bin/
+          
+          echo "Additional security tools installed successfully"
           
       - name: Configure XRDP for Remote Desktop
         run: |
@@ -30,19 +85,20 @@ jobs:
           
           # Configure XRDP to use XFCE desktop
           echo "startxfce4" | sudo tee /etc/skel/.xsession
-          echo "startxfce4" > ~/.xsession
-          chmod +x ~/.xsession
+          sudo chmod +x /etc/skel/.xsession
           
-          # Configure XRDP settings
+          # Configure XRDP settings for better performance
           sudo sed -i 's/max_bpp=32/max_bpp=24/g' /etc/xrdp/xrdp.ini
           sudo sed -i 's/#tcp_nodelay=1/tcp_nodelay=1/g' /etc/xrdp/xrdp.ini
           
-          # Allow RDP through firewall
+          # Configure firewall
           sudo ufw allow 3389/tcp
           sudo ufw --force enable
           
           # Restart XRDP service
           sudo systemctl restart xrdp
+          
+          echo "XRDP configured successfully"
           
       - name: Create RDP User with Static Password
         run: |
@@ -54,8 +110,14 @@ jobs:
           sudo usermod -aG sudo TOOLBOXLAP
           
           # Create .xsession for the user
-          sudo -u TOOLBOXLAP bash -c 'echo "startxfce4" > /home/TOOLBOXLAP/.xsession'
+          sudo mkdir -p /home/TOOLBOXLAP
+          echo "startxfce4" | sudo tee /home/TOOLBOXLAP/.xsession
           sudo chmod +x /home/TOOLBOXLAP/.xsession
+          sudo chown TOOLBOXLAP:TOOLBOXLAP /home/TOOLBOXLAP/.xsession
+          
+          # Create Desktop directory
+          sudo mkdir -p /home/TOOLBOXLAP/Desktop
+          sudo chown -R TOOLBOXLAP:TOOLBOXLAP /home/TOOLBOXLAP
           
           # Set environment variable for credentials
           echo "RDP_CREDS=User: TOOLBOXLAP | Password: admin@123" >> $GITHUB_ENV
@@ -65,6 +127,8 @@ jobs:
               echo "User creation failed"
               exit 1
           fi
+          
+          echo "User created successfully"
           
       - name: Install Tailscale
         run: |
@@ -76,10 +140,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y tailscale
           
+          echo "Tailscale installed successfully"
+          
       - name: Establish Tailscale Connection
         run: |
           # Connect to Tailscale network
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=kali-runner-$GITHUB_RUN_ID
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=security-runner-$GITHUB_RUN_ID
           
           # Wait for IP assignment
           sleep 10
@@ -99,6 +165,7 @@ jobs:
           fi
           
           echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
+          echo "Tailscale connected successfully with IP: $TAILSCALE_IP"
           
       - name: Verify RDP Accessibility
         run: |
@@ -114,41 +181,68 @@ jobs:
               exit 1
           fi
           
-      - name: Install Additional Kali Tools
+      - name: Install Python Security Libraries
         run: |
-          # Install more penetration testing tools
-          sudo apt-get install -y \
-            aircrack-ng \
-            john \
-            hashcat \
-            gobuster \
-            nikto \
-            dirb \
-            hydra \
-            netcat \
-            socat \
-            tcpdump \
-            ettercap-text-only \
-            dnsrecon \
-            enum4linux \
-            smbclient \
-            nbtscan \
-            onesixtyone \
-            oscanner \
-            sslscan \
-            sslyze \
-            whatweb \
-            wpscan \
-            firefox-esr
+          # Install useful Python libraries for security work
+          pip3 install --user \
+            requests \
+            beautifulsoup4 \
+            scapy \
+            paramiko \
+            pycryptodome \
+            dnspython \
+            colorama \
+            argparse
             
+          echo "Python security libraries installed successfully"
+          
+      - name: Create Tool Shortcuts
+        run: |
+          # Create desktop shortcuts for installed tools
+          sudo -u TOOLBOXLAP mkdir -p /home/TOOLBOXLAP/Desktop
+          
+          # Create a tools info file
+          sudo -u TOOLBOXLAP tee /home/TOOLBOXLAP/Desktop/SecurityTools.txt > /dev/null << 'EOF'
+INSTALLED SECURITY TOOLS:
+
+Network Scanning:
+- nmap (network mapper)
+- nc/netcat (network swiss army knife)
+
+Web Security:
+- gobuster (directory/file brute forcer)
+- subfinder (subdomain discovery)
+- httpx (HTTP toolkit)
+- nuclei (vulnerability scanner)
+
+System Tools:
+- curl, wget (HTTP clients)
+- dnsutils (dig, nslookup)
+- net-tools (netstat, ifconfig)
+
+Python Libraries:
+- requests, scapy, paramiko
+- beautifulsoup4, dnspython
+
+Usage Examples:
+nmap -sV target.com
+gobuster dir -u http://target.com -w /usr/share/wordlists/dirb/common.txt
+subfinder -d target.com
+httpx -l domains.txt
+nuclei -t /path/to/templates -u target.com
+EOF
+          
+          sudo chown TOOLBOXLAP:TOOLBOXLAP /home/TOOLBOXLAP/Desktop/SecurityTools.txt
+          
       - name: Maintain Connection
         run: |
           echo ""
-          echo "=== KALI LINUX RDP ACCESS ==="
+          echo "=== SECURITY TOOLS DESKTOP ACCESS ==="
           echo "Address: $TAILSCALE_IP"
           echo "Username: TOOLBOXLAP"
           echo "Password: admin@123"
           echo "Desktop: XFCE4"
+          echo "Tools: See SecurityTools.txt on Desktop"
           echo "=========================="
           echo ""
           
