@@ -1,4 +1,4 @@
-name: RDP
+name: RDP-Kali
 on:
   workflow_dispatch:
 jobs:
@@ -9,19 +9,19 @@ jobs:
 
       - name: Prepare Environment
         run: |
-          echo "Preparing Kali Linux SSH + Tailscale environment..."
+          echo "🚀 Preparing Kali Linux SSH + Tailscale environment..."
 
       - name: Pull and Run Kali Linux in Docker with SSH + Tailscale
         run: |
-          # Pull official lightweight Kali image
+          # Pull official Kali Linux image
           docker pull kalilinux/kali-rolling
 
-          # Define credentials
+          # Define credentials and auth key
           USERNAME="TOOLBOXLAP"
           PASSWORD="admin@123"
           AUTHKEY="${{ secrets.TAILSCALE_AUTH_KEY }}"
 
-          # Create startup script for inside the container
+          # Create startup script inside container
           mkdir -p ./kali-env
           cat > ./kali-env/start.sh << 'EOF'
 #!/bin/bash
@@ -36,21 +36,20 @@ if ! id "$USERNAME" &>/dev/null; then
     useradd -m -s /bin/bash "$USERNAME"
 fi
 
-# Set password
+# Set password and grant sudo
 echo "$USERNAME:$PASSWORD" | chpasswd
 usermod -aG sudo "$USERNAME"
 
-# Install SSH server
+# Install and configure SSH
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server
 
-# Configure SSH
 mkdir -p /var/run/sshd
 sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
 echo "UsePAM no" >> /etc/ssh/sshd_config
 
-# Start SSH daemon
+# Start SSH
 /usr/sbin/sshd
 
 # Install Tailscale
@@ -59,13 +58,12 @@ curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.tailscale-keyring.l
 apt-get update
 apt-get install -y tailscale
 
-# Start Tailscale
+# Authenticate and connect
 tailscale up --authkey="$AUTHKEY" --hostname="gh-kali-\$(hostname)"
 
-# Wait for IP
-echo "Waiting for Tailscale IP..."
+# Wait and capture IP
 sleep 15
-IP4=$(tailscale ip -4 2>/dev/null || echo "")
+IP4=$(tailscale ip -4 2>/dev/null)
 
 if [ -z "$IP4" ]; then
     echo "❌ Failed to obtain Tailscale IP" >&2
@@ -76,15 +74,15 @@ fi
 echo "✅ Tailscale IP: $IP4"
 echo "✅ SSH User: $USERNAME"
 echo "✅ Password: $PASSWORD"
-echo "✅ Connect via: ssh $USERNAME@$IP4"
+echo "✅ Connect: ssh $USERNAME@$IP4"
 
-# Keep container alive
+# Keep alive
 tail -f /dev/null
 EOF
 
           chmod +x ./kali-env/start.sh
 
-          # Launch container with host networking (required for Tailscale)
+          # Run Kali container with host network for Tailscale
           docker run -d \
             --name kali-ssh \
             --network host \
@@ -96,51 +94,50 @@ EOF
             kalilinux/kali-rolling \
             /bin/bash /start.sh
 
-          echo "✅ Kali container launched."
+          echo "✅ Kali container started successfully."
 
-      - name: Wait for Tailscale IP and Export
+      - name: Capture and Export Tailscale IP
         run: |
-          echo "Waiting 30 seconds for Tailscale to connect..."
+          echo "⏳ Waiting 30 seconds for Tailscale to assign IP..."
           sleep 30
 
-          IP=$(docker exec kali-ssh tailscale ip -4 2>/dev/null || echo "")
+          IP=$(docker exec kali-ssh tailscale ip -4 2>/dev/null)
           if [ -z "$IP" ]; then
-            echo "❌ Tailscale IP not assigned." >&2
+            echo "❌ Failed to retrieve Tailscale IP" >&2
             docker logs kali-ssh
             exit 1
           fi
 
           echo "TAILSCALE_IP=$IP" >> $GITHUB_ENV
-          echo "✅ Tailscale IP obtained: $IP"
+          echo "✅ Tailscale IP exported: $IP"
 
-      - name: Verify SSH Port is Reachable
+      - name: Test SSH Connectivity
         run: |
-          echo "Testing SSH access to $TAILSCALE_IP:22..."
+          echo "🔍 Testing SSH access to $TAILSCALE_IP on port 22..."
           nc -zv $TAILSCALE_IP 22
           if [ $? -ne 0 ]; then
-            echo "❌ SSH port 22 unreachable" >&2
+            echo "❌ SSH connection failed" >&2
             exit 1
           fi
-          echo "✅ SSH connectivity confirmed!"
+          echo "✅ SSH port 22 is reachable!"
 
-      - name: Display Connection Instructions
+      - name: Display Access Instructions
         run: |
           echo
-          echo "======================================"
-          echo "    🚀 KALI LINUX SSH ACCESS READY"
-          echo "======================================"
-          echo "🌐 Tailscale IP: $TAILSCALE_IP"
-          echo "👤 Username: TOOLBOXLAP"
-          echo "🔑 Password: admin@123"
-          echo "🔌 Connect via: ssh TOOLBOXLAP@$TAILSCALE_IP"
-          echo "⏱️  This session will stay alive for up to 6 hours."
-          echo "🛑 To stop: Cancel this workflow manually."
-          echo "======================================"
+          echo "=============================================="
+          echo "   🎯 KALI LINUX SSH ACCESS READY (OVER TAILSCALE)"
+          echo "=============================================="
+          echo "   🔑 Username: TOOLBOXLAP"
+          echo "   🔑 Password: admin@123"
+          echo "   🌐 Address:  $TAILSCALE_IP"
+          echo "   📡 Connect:  ssh TOOLBOXLAP@$TAILSCALE_IP"
+          echo "   ⏱️  Session lasts up to 6 hours or until canceled."
+          echo "=============================================="
           echo
 
-      - name: Keep Workflow Alive (Persistent Session)
+      - name: Keep Alive — Maintain Persistent Session
         run: |
           while true; do
-            echo "[$(date)] ✅ SSH Session Active — Workflow will not exit until timeout or manual cancel."
+            echo "[$(date)] 💡 Workflow active — SSH session running. Cancel manually to stop."
             sleep 300
           done
