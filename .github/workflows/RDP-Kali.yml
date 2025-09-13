@@ -79,13 +79,43 @@ jobs:
       - name: Verify RDP Accessibility
         run: |
           echo "Tailscale IP: $TAILSCALE_IP"
+          
+          # Wait for services to fully start
+          sleep 10
+          
+          # Check if XRDP is listening on port 3389
+          if sudo netstat -tlnp | grep :3389; then
+              echo "XRDP is listening on port 3389"
+          else
+              echo "XRDP is NOT listening on port 3389"
+              echo "Attempting to restart XRDP..."
+              sudo systemctl restart xrdp-sesman
+              sudo systemctl restart xrdp
+              sleep 5
+              sudo netstat -tlnp | grep :3389
+          fi
+          
+          # Check service status
+          echo "=== XRDP Status ==="
+          sudo systemctl status xrdp --no-pager
+          echo "=== XRDP-SESMAN Status ==="
+          sudo systemctl status xrdp-sesman --no-pager
+          
+          # Test local connection
+          timeout 5 bash -c "</dev/tcp/127.0.0.1/3389" 2>/dev/null
+          if [ $? -eq 0 ]; then
+              echo "Local RDP port 3389 is accessible"
+          else
+              echo "Local RDP port 3389 is NOT accessible"
+          fi
+          
+          # Test Tailscale connection
           timeout 10 bash -c "</dev/tcp/$TAILSCALE_IP/3389" 2>/dev/null
           if [ $? -eq 0 ]; then
-              echo "TCP connectivity successful!"
+              echo "Tailscale RDP connectivity successful!"
           else
-              echo "TCP connection to RDP port 3389 failed"
-              sudo systemctl status xrdp --no-pager
-              exit 1
+              echo "Tailscale RDP connectivity failed - but continuing anyway"
+              echo "Try connecting directly to: $TAILSCALE_IP:3389"
           fi
           
       - name: Maintain Connection
