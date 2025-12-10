@@ -30,40 +30,44 @@ jobs:
           sudo dscl . -append /Groups/admin GroupMembership toolmac
           sudo createhomedir -c -u toolmac > /dev/null
 
-      ########################################################
-      #   FIXED — TRUE WORKING TAILSCALE INSTALLER FOR MAC   #
-      ########################################################
+      #########################################################
+      #   FIXED — TRUE WORKING TAILSCALE BINARY INSTALLATION  #
+      #########################################################
       - name: Install Tailscale
         run: |
-          TS_VERSION=$(curl -s https://api.github.com/repos/tailscale/tailscale/releases/latest | grep tag_name | cut -d '"' -f 4 | sed 's/^v//')
-          echo "Installing Tailscale version: $TS_VERSION"
+          echo "Downloading Tailscale macOS CLI..."
+          curl -L -o tailscale.tgz https://pkgs.tailscale.com/stable/tailscale-macos-amd64.tgz
 
-          curl -L -o tailscale.pkg "https://pkgs.tailscale.com/stable/tailscale-${TS_VERSION}-macos.pkg"
-          sudo installer -pkg tailscale.pkg -target /
+          echo "Extracting..."
+          tar -xzf tailscale.tgz
 
+          echo "Installing binaries..."
+          sudo mv tailscale*/tailscale /usr/local/bin/
+          sudo mv tailscale*/tailscaled /usr/local/bin/
+
+          echo "Starting tailscaled..."
           sudo tailscaled &
-          sleep 3
+          sleep 5
 
       - name: Connect Tailscale
         run: |
-          sudo tailscale up \
-            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} \
-            --hostname=mac-runner-${GITHUB_RUN_ID}
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=mac-runner-${GITHUB_RUN_ID}
 
-      - name: Get Tailscale IP
+      - name: Show IP
         run: |
           TS_IP=$(tailscale ip -4)
+          echo "Tailscale IP: $TS_IP"
           echo "TS_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Show Connection Info
+      - name: Show RDP Info
         run: |
           echo "=============================="
-          echo " macOS RDP (VNC) ACCESS"
+          echo " macOS VNC ACCESS"
           echo "=============================="
-          echo "Tailscale IP:  $TS_IP"
-          echo "Port:          5900"
-          echo "Username:      toolmac"
-          echo "Password:      admin@123"
+          echo "IP:       $TS_IP"
+          echo "Port:     5900"
+          echo "User:     toolmac"
+          echo "Password: admin@123"
           echo "=============================="
 
       - name: Keep Session Alive
