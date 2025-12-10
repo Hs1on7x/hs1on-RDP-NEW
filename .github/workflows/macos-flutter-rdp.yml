@@ -37,27 +37,21 @@ jobs:
             sudo createhomedir -c -u $USERNAME > /dev/null
           fi
 
-      # 3️⃣ تثبيت Tailscale CLI وتشغيله - FIXED DOWNLOAD
-      - name: Install Tailscale CLI
+      # 3️⃣ تثبيت Tailscale CLI باستخدام Homebrew (أكثر موثوقية)
+      - name: Install Tailscale CLI with Homebrew
         run: |
-          echo "Downloading Tailscale CLI (macOS)..."
-          # Use the correct download URL with proper headers and verification
-          curl -L -o tailscale.tgz "https://pkgs.tailscale.com/stable/tailscale-macos-amd64.tgz"
-          
-          # Verify the downloaded file size (should be more than 10 bytes)
-          FILE_SIZE=$(wc -c < tailscale.tgz)
-          echo "Downloaded file size: $FILE_SIZE bytes"
-          
-          if [ "$FILE_SIZE" -le 100 ]; then
-            echo "Error: Downloaded file is too small ($FILE_SIZE bytes). Download failed."
-            exit 1
+          # Install Homebrew if not already installed
+          if ! command -v brew &> /dev/null; then
+            echo "Installing Homebrew..."
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
           fi
           
-          tar -xzf tailscale.tgz
-          sudo mv tailscale*/tailscale /usr/local/bin/
-          sudo mv tailscale*/tailscaled /usr/local/bin/
-          sudo tailscaled &
-          sleep 5
+          # Install Tailscale using Homebrew
+          echo "Installing Tailscale with Homebrew..."
+          brew install tailscale
+          
+          # Start tailscaled service
+          sudo brew services start tailscale
 
       # 4️⃣ الاتصال بشبكة Tailscale
       - name: Connect Tailscale
