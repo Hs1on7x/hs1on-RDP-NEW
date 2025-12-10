@@ -8,19 +8,24 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      # 1️⃣ Enable VNC Screen Sharing
+      # 1️⃣ Enable VNC Screen Sharing with proper configuration
       - name: Enable VNC Screen Sharing
         run: |
           sudo systemsetup -setremotelogin on
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist
+          
+          # Configure VNC with proper settings for headless environment
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw "admin@123" \
             -restart -agent -privs -all
 
-      # 2️⃣ Create Remote User
-      - name: Create Remote User with Static Password
+          # Start VNC server with proper display
+          sudo /usr/bin/vncserver -geometry 1920x1080 -depth 24 -rfbauth ~/.vnc/passwd -localhost no
+
+      # 2️⃣ Create Remote User and ensure GUI session
+      - name: Create Remote User with GUI Session
         run: |
           USERNAME="toolmac"
           PASSWORD="admin@123"
@@ -37,23 +42,24 @@ jobs:
             sudo createhomedir -c -u $USERNAME > /dev/null
           fi
 
-      # 3️⃣ Install Tailscale with Homebrew (FIXED)
-      - name: Install Tailscale CLI with Homebrew
+          # Ensure user can login and has proper permissions
+          sudo defaults write /Library/Preferences/com.apple.loginwindow AutoLoginUser $USERNAME
+          sudo defaults write /Library/Preferences/com.apple.loginwindow AutoLoginPasswordHint "admin@123"
+          sudo defaults write /Library/Preferences/com.apple.loginwindow AutoLoginDelay 0
+
+      # 3️⃣ Install Tailscale with Homebrew
+      - name: Install Tailscale CLI
         run: |
-          # Install Homebrew if needed
           if ! command -v brew &> /dev/null; then
             echo "Installing Homebrew..."
             /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
           fi
           
-          # Install Tailscale
           echo "Installing Tailscale..."
           brew install tailscale
-          
-          # Start tailscaled service
           sudo brew services start tailscale
 
-      # 4️⃣ Disable Firewall Temporarily
+      # 4️⃣ Disable Firewall
       - name: Disable Firewall for Testing
         run: |
           echo "Disabling macOS firewall..."
@@ -66,24 +72,37 @@ jobs:
           TS_IP=$(tailscale ip -4)
           echo "TS_IP=$TS_IP" >> $GITHUB_ENV
 
-      # 6️⃣ Show Connection Info
-      - name: Show VNC Connection Info
+      # 6️⃣ Verify VNC is working with detailed debugging
+      - name: Verify VNC Connection
         run: |
           echo "=============================="
-          echo " macOS VNC ACCESS (NOT RDP)"
+          echo " macOS VNC ACCESS"
           echo "=============================="
           echo "Tailscale IP:  $TS_IP"
-          echo "Port:          5900 (VNC)"
+          echo "Port:          5900"
           echo "Username:      toolmac"
           echo "Password:      admin@123"
           echo "=============================="
-          echo "Use a VNC client, NOT RDP!"
-          echo "=============================="
+          
+          # Check VNC server status
+          echo "Checking VNC server status..."
+          ps aux | grep vnc
+          
+          # Check display information
+          echo "Display information:"
+          /usr/bin/vncserver -list
+          
+          # Test VNC connection locally
+          echo "Testing VNC connection locally..."
+          vncviewer localhost:5900 -passwd <(echo "admin@123") -norepeat
 
       # 7️⃣ Keep Session Alive
       - name: Keep Session Alive
         run: |
           while true; do
             echo "[$(date)] macOS VNC Active"
+            # Keep the VNC server running
+            sudo /usr/bin/vncserver -kill :1 2>/dev/null || true
+            sudo /usr/bin/vncserver :1 -geometry 1920x1080 -depth 24 -rfbauth ~/.vnc/passwd -localhost no
             sleep 300
           done
