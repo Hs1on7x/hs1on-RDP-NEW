@@ -31,43 +31,40 @@ jobs:
           sudo createhomedir -c -u toolmac > /dev/null
 
       #########################################################
-      #   FIXED — TRUE WORKING TAILSCALE BINARY INSTALLATION  #
+      #   TAILSCALE INSTALLATION + CONNECTION (FIXED)       #
       #########################################################
       - name: Install Tailscale
         run: |
-          echo "Downloading Tailscale macOS CLI..."
-          curl -L -o tailscale.tgz https://pkgs.tailscale.com/stable/tailscale-macos-amd64.tgz
+          echo "Downloading Tailscale pkg..."
+          curl -L -o tailscale.pkg https://pkgs.tailscale.com/stable/tailscale-macos-arm64.pkg
 
-          echo "Extracting..."
-          tar -xzf tailscale.tgz
+          echo "Installing..."
+          sudo installer -pkg tailscale.pkg -target /
 
-          echo "Installing binaries..."
-          sudo mv tailscale*/tailscale /usr/local/bin/
-          sudo mv tailscale*/tailscaled /usr/local/bin/
-
-          echo "Starting tailscaled..."
+          echo "Starting daemon..."
           sudo tailscaled &
           sleep 5
 
       - name: Connect Tailscale
         run: |
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=mac-runner-${GITHUB_RUN_ID}
+          sudo tailscale up \
+            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} \
+            --hostname=mac-runner-${GITHUB_RUN_ID}
 
-      - name: Show IP
+      - name: Get Tailscale IP
         run: |
           TS_IP=$(tailscale ip -4)
-          echo "Tailscale IP: $TS_IP"
           echo "TS_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Show RDP Info
+      - name: Show Connection Info
         run: |
           echo "=============================="
-          echo " macOS VNC ACCESS"
+          echo " macOS RDP (VNC) ACCESS"
           echo "=============================="
-          echo "IP:       $TS_IP"
-          echo "Port:     5900"
-          echo "User:     toolmac"
-          echo "Password: admin@123"
+          echo "Tailscale IP:  $TS_IP"
+          echo "Port:          5900"
+          echo "Username:      toolmac"
+          echo "Password:      admin@123"
           echo "=============================="
 
       - name: Keep Session Alive
