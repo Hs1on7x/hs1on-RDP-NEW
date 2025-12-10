@@ -8,7 +8,7 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      # 1️⃣ تفعيل VNC / Remote Management
+      # 1️⃣ Enable VNC Screen Sharing
       - name: Enable VNC Screen Sharing
         run: |
           sudo systemsetup -setremotelogin on
@@ -19,7 +19,7 @@ jobs:
             -clientopts -setvncpw -vncpw "admin@123" \
             -restart -agent -privs -all
 
-      # 2️⃣ إنشاء مستخدم ثابت للوصول
+      # 2️⃣ Create Remote User
       - name: Create Remote User with Static Password
         run: |
           USERNAME="toolmac"
@@ -37,51 +37,50 @@ jobs:
             sudo createhomedir -c -u $USERNAME > /dev/null
           fi
 
-      # 3️⃣ تثبيت Tailscale CLI باستخدام Homebrew (أكثر موثوقية)
+      # 3️⃣ Install Tailscale with Homebrew (FIXED)
       - name: Install Tailscale CLI with Homebrew
         run: |
-          # Install Homebrew if not already installed
+          # Install Homebrew if needed
           if ! command -v brew &> /dev/null; then
             echo "Installing Homebrew..."
             /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
           fi
           
-          # Install Tailscale using Homebrew
-          echo "Installing Tailscale with Homebrew..."
+          # Install Tailscale
+          echo "Installing Tailscale..."
           brew install tailscale
           
           # Start tailscaled service
           sudo brew services start tailscale
 
-      # 4️⃣ إيقاف جدار الحماية مؤقتاً للاختبار
-      - name: Disable Firewall Temporarily
+      # 4️⃣ Disable Firewall Temporarily
+      - name: Disable Firewall for Testing
         run: |
-          echo "Disabling macOS firewall for testing..."
+          echo "Disabling macOS firewall..."
           sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off
 
-      # 5️⃣ الاتصال بشبكة Tailscale
+      # 5️⃣ Connect to Tailscale
       - name: Connect Tailscale
         run: |
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=mac-runner-${GITHUB_RUN_ID}
           TS_IP=$(tailscale ip -4)
           echo "TS_IP=$TS_IP" >> $GITHUB_ENV
 
-      # 6️⃣ التحقق من الاتصال وعرض بيانات الدخول
-      - name: Show RDP / VNC Connection Info
+      # 6️⃣ Show Connection Info
+      - name: Show VNC Connection Info
         run: |
           echo "=============================="
-          echo " macOS RDP (VNC) ACCESS"
+          echo " macOS VNC ACCESS (NOT RDP)"
           echo "=============================="
           echo "Tailscale IP:  $TS_IP"
-          echo "Port:          5900"
+          echo "Port:          5900 (VNC)"
           echo "Username:      toolmac"
           echo "Password:      admin@123"
           echo "=============================="
-          echo "Testing VNC connection..."
-          echo "vnc://$TS_IP:5900"
+          echo "Use a VNC client, NOT RDP!"
           echo "=============================="
 
-      # 7️⃣ الحفاظ على الجلسة نشطة
+      # 7️⃣ Keep Session Alive
       - name: Keep Session Alive
         run: |
           while true; do
