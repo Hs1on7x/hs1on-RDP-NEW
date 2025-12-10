@@ -30,10 +30,21 @@ jobs:
           sudo dscl . -append /Groups/admin GroupMembership toolmac
           sudo createhomedir -c -u toolmac > /dev/null
 
-      - name: Install Tailscale
+      ##########################################
+      #   FIXED — TRUE WORKING TAILSCALE CLI   #
+      ##########################################
+      - name: Install Tailscale (Binary)
         run: |
-          curl -fsSL https://tailscale.com/install.sh | sh
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=mac-runner-${GITHUB_RUN_ID}
+          curl -fsSL https://pkgs.tailscale.com/stable/tailscale_apple_universal.tgz | tar -xz
+          sudo mv tailscale*/tailscale /usr/local/bin/
+          sudo mv tailscale*/tailscaled /usr/local/bin/
+          sudo tailscaled &
+
+      - name: Connect Tailscale
+        run: |
+          sudo tailscale up \
+            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} \
+            --hostname=mac-runner-${GITHUB_RUN_ID}
 
       - name: Get Tailscale IP
         run: |
