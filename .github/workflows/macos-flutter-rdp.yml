@@ -37,12 +37,22 @@ jobs:
             sudo createhomedir -c -u $USERNAME > /dev/null
           fi
 
-      # 3️⃣ تثبيت Tailscale CLI وتشغيله - FIXED URL
+      # 3️⃣ تثبيت Tailscale CLI وتشغيله - FIXED DOWNLOAD
       - name: Install Tailscale CLI
         run: |
           echo "Downloading Tailscale CLI (macOS)..."
-          # Use the correct download URL format
+          # Use the correct download URL with proper headers and verification
           curl -L -o tailscale.tgz "https://pkgs.tailscale.com/stable/tailscale-macos-amd64.tgz"
+          
+          # Verify the downloaded file size (should be more than 10 bytes)
+          FILE_SIZE=$(wc -c < tailscale.tgz)
+          echo "Downloaded file size: $FILE_SIZE bytes"
+          
+          if [ "$FILE_SIZE" -le 100 ]; then
+            echo "Error: Downloaded file is too small ($FILE_SIZE bytes). Download failed."
+            exit 1
+          fi
+          
           tar -xzf tailscale.tgz
           sudo mv tailscale*/tailscale /usr/local/bin/
           sudo mv tailscale*/tailscaled /usr/local/bin/
