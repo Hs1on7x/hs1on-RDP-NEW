@@ -15,7 +15,6 @@ jobs:
           USERNAME="TOOLBOXLAP"
           PASSWORD="admin@123"
           
-          # Create user if not exists
           if ! id "$USERNAME" &>/dev/null; then
             sudo sysadminctl -addUser "$USERNAME" -password "$PASSWORD" -admin
           fi
@@ -24,32 +23,33 @@ jobs:
 
       - name: Enable VNC (Screen Sharing / GUI Access)
         run: |
-          # Enable Screen Sharing (VNC)
-          sudo defaults write /var/db/launchd.db/com.apple.launchd/overrides.plist com.apple.screensharing -dict Disabled -bool false
-          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist || true
-
-          # Set VNC password
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes \
             -clientopts -setvncpw -vncpw admin123 \
             -restart -agent -privs -all || true
 
-      - name: Install Tailscale
+      - name: Install & Start Tailscale
         run: |
           brew install tailscale || true
-          sudo /Applications/Tailscale.app/Contents/MacOS/Tailscaled &
-          sleep 5
+          
+          # ✅ Correct way to start tailscaled via brew
+          sudo /opt/homebrew/opt/tailscale/bin/tailscaled &
+          sleep 10
+          
+          # Verify it's running
+          pgrep tailscaled && echo "tailscaled is running" || echo "tailscaled failed to start"
 
       - name: Establish Tailscale Connection
         run: |
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} \
+          sudo /opt/homebrew/opt/tailscale/bin/tailscale up \
+            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} \
             --hostname=gh-mac-${{ github.run_id }}
           
           RETRIES=0
           TS_IP=""
-          while [ -z "$TS_IP" ] && [ $RETRIES -lt 10 ]; do
-            TS_IP=$(tailscale ip -4 2>/dev/null || true)
+          while [ -z "$TS_IP" ] && [ $RETRIES -lt 15 ]; do
+            TS_IP=$(/opt/homebrew/opt/tailscale/bin/tailscale ip -4 2>/dev/null || true)
             sleep 5
             RETRIES=$((RETRIES+1))
           done
@@ -61,22 +61,20 @@ jobs:
           
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Verify SSH Connectivity
+      - name: Verify Ports
         run: |
           echo "Tailscale IP: $TAILSCALE_IP"
-          # Test SSH port
-          nc -zv "$TAILSCALE_IP" 22 && echo "SSH port open!" || echo "SSH port check failed"
-          # Test VNC port
-          nc -zv "$TAILSCALE_IP" 5900 && echo "VNC port open!" || echo "VNC port check failed"
+          nc -zv "$TAILSCALE_IP" 22   && echo "✅ SSH port open"  || echo "❌ SSH port failed"
+          nc -zv "$TAILSCALE_IP" 5900 && echo "✅ VNC port open"  || echo "❌ VNC port failed"
 
       - name: Maintain Connection
         run: |
           echo ""
           echo "=== MAC ACCESS INFO ==="
-          echo "Tailscale IP : $TAILSCALE_IP"
-          echo "SSH          : ssh TOOLBOXLAP@$TAILSCALE_IP"
-          echo "SSH Password : admin@123"
-          echo "VNC (GUI)    : vnc://$TAILSCALE_IP:5900  |  Password: admin123"
+          echo "Tailscale IP  : $TAILSCALE_IP"
+          echo "SSH           : ssh TOOLBOXLAP@$TAILSCALE_IP"
+          echo "SSH Password  : admin@123"
+          echo "VNC (GUI)     : $TAILSCALE_IP:5900  |  Password: admin123"
           echo "========================"
           echo ""
           while true; do
